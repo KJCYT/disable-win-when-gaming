@@ -1,172 +1,259 @@
-# WinKeyGuard —— 打游戏时自动禁用 Win 键
+# WinKeyGuard
 
-打游戏误触 Win 键弹出开始菜单、画面卡住被坑？这个小工具会在**游戏运行时自动禁用 Win 键**，**游戏一退出立刻恢复**，全程不用手动开关。
+> 打游戏时自动禁用 Windows 键，退出游戏自动恢复。
 
-- 不写注册表，不改 Scancode Map，不重启，不给系统留残留
-- 程序一退出（正常关、Ctrl+C、任务管理器结束、甚至崩溃），Win 键**立刻**恢复
-- 平时零影响：只在游戏跑着的那段时间装键盘钩子，其他时候完全不碰键盘
+打游戏时手一抖碰到 Win 键，开始菜单弹出来、游戏被切出去、画面卡住——回来的时候已经被坑了。这个小工具在游戏运行时吞掉 Win 键，游戏一退出立刻还给系统。
+
+**不改注册表，不重写 Scancode Map，不需要重启，也不会留下"Win 键永久失效"的烂摊子。**
 
 ---
 
-## 一、快速开始（三步）
+## 为什么不用改注册表那种方案
 
-**1. 双击 `自检.bat`**
+网上常见做法是改注册表的 `Scancode Map`，把 Win 键彻底映射掉。问题是：
 
-会打印环境信息、能不能装钩子、当前前台程序是什么、会不会被判定成"正在游戏"。看到"键盘钩子：可以安装"就说明这台机器没问题。
+- 改完要**重启**才生效
+- 玩完得**手动改回来**，忘了就一直废着
+- 正好和"游戏结束要恢复"的诉求相反
 
-**2. 双击 `启动守护.bat`**
+本项目改用**全局低级键盘钩子**（`WH_KEYBOARD_LL`）：只在游戏运行的那段时间安装钩子，把 Win 键的按下/抬起事件在系统看到之前吞掉。钩子属于进程，**进程结束系统自动回收**——正常关闭、Ctrl+C、任务管理器结束、甚至崩溃，Win 键都会立刻恢复。
 
-守护进程在后台跑起来（用 `pythonw` 启动，不留黑窗口），会自动弹出日志文件方便确认。
+---
 
-**3. 开游戏**
+## 特性
 
-游戏进程一出现，日志里就会出现：
+- **自动判断**：游戏进程出现 → 禁用；进程消失 → 恢复，无需手动开关
+- **零残留**：钩子随进程生灭，不会把系统留在"Win 键坏了"的状态
+- **两套判据**：进程名单（内置 49 个常见游戏）+ 全屏独占检测（名单外的新游戏也能自动生效）
+- **误判防护**：全屏检测排除"最大化窗口"、浏览器、播放器，看全屏视频不会被误禁
+- **无第三方依赖**：单文件 Python，只用标准库
+- **可热加载**：改完 `config.json` 的名单不用重启
+- **单实例**：重复启动会提示而不是起多个进程
+
+---
+
+## 环境要求
+
+- Windows 10 / 11
+- Python 3.8+（在 3.12 上实测）
+
+无需 `pip install` 任何东西。
+
+---
+
+## 快速开始
+
+下载或克隆本仓库后，进入项目目录，确认目录里有 `wingard.py` 和 `config.json`。
+
+**1. 自检**
+
+```bash
+python wingard.py --diagnose
+```
+
+确认 `键盘钩子: 可以安装`、`Win 键状态: 正常`。
+
+**2. 验证拦截真的有效**
+
+```bash
+python wingard.py --test-hook 10
+```
+
+这 10 秒内按 Win 键不会有任何反应，10 秒后自动恢复。这是最直观的验证。
+
+**3. 启动守护**
+
+```bash
+python wingard.py          # 前台运行，看得到日志，Ctrl+C 退出
+```
+
+或者双击 `启动守护.bat` 后台运行（`pythonw` 启动，不留黑窗口）。
+
+**4. 开游戏**
+
+日志里会出现：
 
 ```
 已禁用 Win 键 —— 游戏运行中：cs2.exe
 ```
 
-游戏退出，1 秒内出现：
+游戏退出后 1 秒内：
 
 ```
 已恢复 Win 键 —— 未检测到游戏
 ```
 
-想手动确认当前状态：`python wingard.py --status`
-
 ---
 
-## 二、四种用法
+## 命令行
 
-| 场景 | 怎么做 |
+| 命令 | 作用 |
 |---|---|
-| **平时挂着，自动判断** | 双击 `启动守护.bat`（推荐） |
-| **想看着日志跑** | `python wingard.py`（前台运行，Ctrl+C 退出） |
-| **只想临时顶一下** | `python wingard.py --test-hook 30`（30 秒内 Win 键失效，到点自动恢复） |
-| **想停掉** | 双击 `停止守护.bat`，或运行中按 `Ctrl+Alt+Q` |
-
-> 用 `--test-hook` 时不用启动其它东西：装钩子 → 按住秒数 → 自动卸载，中途按 Ctrl+C 也会立刻恢复。
-
----
-
-## 三、它是怎么判断"在打游戏"的
-
-两套判据，任意一条命中就禁用：
-
-1. **进程名单**（主力）：`config.json` 的 `games` 里列出的进程名，只要有进程在跑就禁用。默认已经内置 49 个常见游戏（CS2、无畏契约、LOL、DOTA2、黑神话、原神、帕鲁、绝地求生等）。
-2. **全屏检测**（补充）：当前前台窗口**独占了一整块显示器**时也算游戏。这样没写进名单的新游戏也能自动生效。
-
-判断"全屏"用的是几何面积占比 ≥ 98.5%，而且**排除掉"最大化"的普通窗口**（最大化会避开任务栏，所以记事本、浏览器最大化不会被误判）。浏览器、播放器另有排除名单兜底，看全屏视频不会误禁用。
-
-**新游戏没被识别怎么办？** 开游戏 → 切到桌面 → 运行：
-
-```
-python wingard.py --add
-```
-
-它会把当前前台程序加进名单（守护进程下一秒自动读到，不用重启）。或者直接说名字：`python wingard.py --add eldenring`。
-不想要了就 `python wingard.py --remove eldenring`。
+| `python wingard.py` | 前台运行守护 |
+| `python wingard.py --status` | 查看当前状态（是否禁用、原因、PID） |
+| `python wingard.py --stop` | 停止后台实例（先请求优雅退出，3 秒不退才强杀） |
+| `python wingard.py --test-hook 10` | 临时拦截 N 秒用于验证，到点自动恢复 |
+| `python wingard.py --add` | 把**当前前台程序**加入游戏名单 |
+| `python wingard.py --add eldenring` | 按名字加入名单 |
+| `python wingard.py --remove eldenring` | 从名单移除 |
+| `python wingard.py --once` | 只检测一次并打印判定结果 |
+| `python wingard.py --diagnose` | 环境自检 |
 
 ---
 
-## 四、热键
+## 热键
+
+守护运行期间生效：
 
 | 热键 | 作用 |
 |---|---|
-| `Ctrl+Alt+P` | 暂停/继续守护（暂停后 Win 键立刻恢复正常） |
-| `Ctrl+Alt+L` | 手动锁定/解锁 Win 键（游戏没开也想锁一会儿） |
+| `Ctrl+Alt+L` | 手动锁定 / 解锁 Win 键 |
+| `Ctrl+Alt+P` | 暂停 / 继续守护（暂停后 Win 键立刻恢复） |
 | `Ctrl+Alt+Q` | 退出程序并恢复 Win 键 |
 
-想换键就改 `config.json` 里的 `hotkeys`，改完**重启程序**生效。如果某个热键被别的软件占了，日志里会有一行"注册失败"，换一个就行。
+改 `config.json` 里的 `hotkeys` 可自定义，但**需重启生效**。热键被占用时日志会写一行 `注册失败`。
 
 ---
 
-## 五、配置文件 `config.json`
+## 它是怎么判断"在打游戏"的
 
-首次运行会自动生成，只改你需要的项；**改完不用重启**（热键除外，热键只有启动时读一次）。
+**判据一 · 进程名单（主力）**
+
+`config.json` 的 `games` 列表，只要列表里的进程在运行就禁用。内置 49 个常见游戏（CS2、无畏契约、LOL、DOTA2、黑神话、原神、帕鲁、PUBG 等）。
+
+进程名不带 `.exe` 也行，不区分大小写，支持 `*` 通配（如 `blackmyth*`）。
+
+**判据二 · 全屏独占检测（补充）**
+
+当前前台窗口独占整块显示器（面积占比 ≥ 98.5%）时也算游戏。这样没写进名单的新游戏同样生效。
+
+特意排除的情况：
+- **最大化的普通窗口**（最大化会避开任务栏，不满足占比；且显式检查 `WS_MAXIMIZE`）
+- **浏览器 / 播放器等**，走 `fullscreen_exclusions` 名单
+
+**新游戏没被识别？** 开着游戏跑 `python wingard.py --add`，会把当前前台进程加进名单。守护进程下一秒自动读到，不用重启。
+
+---
+
+## 配置
+
+首次运行自动生成 `config.json`。改完不需要重启（热键除外）。
 
 | 字段 | 默认 | 说明 |
 |---|---|---|
-| `games` | 49 个常见游戏 | 游戏进程名，不带 `.exe` 也行，不区分大小写，支持 `*` 通配（如 `blackmyth*`） |
+| `games` | 49 个常见游戏 | 游戏进程名列表 |
 | `detect_fullscreen` | `true` | 是否启用全屏检测 |
-| `fullscreen_exclusions` | 浏览器/播放器等 | 全屏检测的排除名单 |
-| `require_foreground` | `false` | 改 `true` 后只有游戏窗口在前台才禁用；多开挂机时不建议改 |
-| `poll_interval` | `1.0` | 检测间隔（秒），0.2~10 |
-| `beep` | `true` | 禁用/恢复时响一声提示 |
-| `block_apps_key` | `true` | 顺便拦掉菜单键（右 Ctrl 左边那个） |
-| `swallow_combo_keys` | `false` | 见下方"Win+D 的 D 漏进去" |
-| `pause_minutes` | `0` | 暂停多久后自动恢复守护，0 表示一直暂停到手按 |
+| `fullscreen_exclusions` | 浏览器/播放器 | 全屏检测排除名单 |
+| `require_foreground` | `false` | `true` 时只有游戏在前台才禁用 |
+| `poll_interval` | `1.0` | 检测间隔（秒），范围 0.2~10 |
+| `beep` | `true` | 禁用/恢复时提示音 |
+| `block_apps_key` | `true` | 顺带拦截菜单键 |
+| `swallow_combo_keys` | `false` | 见下 |
+| `pause_minutes` | `0` | 暂停多久后自动恢复，0 = 一直暂停 |
 
-### 关于 `swallow_combo_keys`
+### `swallow_combo_keys` 说明
 
-Win 键被吞掉后，`Win+D` 里的 `D` 还是会送到游戏里。绝大多数游戏对这个 `D` 毫无反应，所以默认不开。万一你的游戏恰好用 `D`（比如移动键），可以打开它：Win 被按住期间的其他按键也一起吞掉。
+Win 键被吞掉后，`Win+D` 里的 `D` 仍会送到游戏。绝大多数游戏对它没反应，所以默认关闭。若你的游戏恰好用 `D` 做移动，可打开：Win 被按住期间的其他按键也一起吞掉。
 
-它带 2 秒超时保护——就算 Win 键的抬起事件丢了，也不会出现"按什么都没反应"。
-
----
-
-## 六、想确认真的有效？
-
-```
-python wingard.py --test-hook 10
-```
-
-这 10 秒里随便按 Win 键，开始菜单不会弹出来；10 秒一到自动恢复，再按就正常了。这是最直观、也最可靠的验证方式。
+带 2 秒超时保护——即使 Win 键抬起事件丢失，也不会出现"按什么都没反应"。
 
 ---
 
-## 七、常见问题
+## 安全与反作弊说明
 
-**Q：游戏以管理员身份运行，工具还有效吗？**
-需要工具也用管理员权限。右键 `启动守护.bat` → 以管理员身份运行即可。自检里会显示当前是否管理员。
+**这个工具做了什么：**
+- 使用 `SetWindowsHookEx(WH_KEYBOARD_LL)` 安装键盘钩子
+- 用 `CreateToolhelp32Snapshot` 枚举进程名
+- 用 `GetForegroundWindow` / `GetWindowRect` 判断前台窗口是否全屏
 
-**Q：为什么不用改 Scancode Map 那种办法？**
-那个办法要改注册表并重启，而且一旦忘了改回来，Win 键就一直是废的——正好是"游戏结束要恢复"的反面。钩子方案随进程生灭，天然满足"结束就恢复"。
+**它没有做什么：**
+- 不读写任何其他进程的内存
+- 不注入 DLL
+- 不模拟键鼠输入
+- 不访问网络，没有任何上传/下载行为
+- 不写注册表的系统敏感项
 
-**Q：装钩子会被游戏的反作弊封吗？**
-低级键盘钩子只用 `SetWindowsHookEx`，不读写游戏内存、不注入、不模拟输入、不碰网络。但反作弊策略各家用各家的，如果你玩的是带严格反作弊的竞技游戏，**先用 `--test-hook` 试一次、观察有没有异常**，或者干脆只在单机游戏时开。这一点我无法替任何厂商打包票。
+**关于反作弊**：虽然上述行为都是公开的标准 Windows API，但各家反作弊策略不同，**我无法替任何厂商保证不会被误判**。如果你玩的竞技游戏反作弊较严格，建议先用 `--test-hook` 试一次并观察，或仅在单机游戏时开启。自行评估风险。
 
-**Q：万一程序被强制杀掉，Win 键会不会永久锁死？**
-不会。钩子属于进程，进程一死系统自动回收，Win 键立刻恢复。这也是这个方案最省心的地方。
+---
 
-**Q：为什么日志是乱码？**
-日志文件本身是 UTF-8。用记事本/VS Code 打开就是正常的；如果是 cmd 里 `type` 看到乱码，那是 cmd 编码问题，不影响功能。
+## 常见问题
 
-**Q：为什么 `.bat` 里全是英文？**
-这是刻意的，不是没做完。cmd.exe 解析 `.bat` 用的是**系统代码页**（中文 Windows 通常是 936/GBK），文件一旦存成 UTF-8，中文字节在 GBK 下就会错位，整行被切碎成乱码命令——报错长这样：`'父鑝钆' 不是内部或外部命令`。开头写 `chcp 65001` 也救不了，因为解析文件本身发生在 chcp 生效之前。
-所以四个 `.bat` 一律只写 ASCII，所有中文提示交给 `wingard.py` 打印（Python 按控制台代码页输出，中文显示完全正常）。**你不用改这些文件**；要改行为请改 `config.json`，或直接跑 Python 命令。
+**Q：游戏以管理员身份运行，还有效吗？**
 
-**Q：能不能开机自启？**
-可以。把 `启动守护.bat` 的快捷方式放进 `shell:startup`（Win+R 输入这个就能打开启动文件夹）。
+需要本工具也用管理员权限运行。否则钩子优先级不够，拦不住提权进程的按键。
 
-**Q：双击 `.bat` 每次都弹「打开文件 - 安全警告 / 无法验证发布者」怎么办？**
-这是 Windows 的 Mark-of-the-Web（网络标记）机制：文件从网上下载、或文件夹被打包传输过，Windows 就会给它打上 `Zone.Identifier` 标记，之后每次运行都弹这个框。
+**Q：程序被强制杀掉，Win 键会永久锁死吗？**
 
-**双击 `解除文件锁定.bat`** 就能一次性清掉本文件夹所有文件上的标记，之后不再弹窗。
+不会。钩子属于进程，进程结束系统自动回收。这是本方案最省心的地方。
 
-也可以手动做：右键 `.bat` → 属性 → 勾选底部「解除锁定」→ 确定。
-或者一行命令：
+**Q：双击 `.bat` 弹出"打开文件 - 安全警告 / 无法验证发布者"怎么办？**
+
+这是 Windows 的 Mark-of-the-Web（网络标记）：从 GitHub 下载 ZIP 解压后，文件会带上 `Zone.Identifier` 标记，每次运行都弹框。
+
+双击 `解除文件锁定.bat` 清除，或右键文件 → 属性 → 勾选「解除锁定」。命令行：
 
 ```powershell
-Get-ChildItem "D:\Code\2026.10.19_游戏禁用win" -Recurse -File | Unblock-File
+Get-ChildItem . -Recurse -File | Unblock-File
 ```
 
-**为什么不能靠“给文件签名”解决？** 因为 `.bat` **在格式上就无法被签名**——Authenticode 签名需要文件里有 PE 结构来存放签名字节，`.bat` 是纯文本，没有这个位置（实测 `Get-AuthenticodeSignature` 对 `.bat` 返回 `UnknownError: not one supported by the trust provider`，而同一个 `notepad.exe` 是 `Valid`）。而且这个弹窗的判定依据是**有没有网络标记**，不是签名；签名最多让框里显示真实发布者名称，并不会让框消失。
+**为什么不能签名解决？** `.bat` 在格式上无法被 Authenticode 签名（纯文本没有存放签名的 PE 结构），且该弹窗的判定依据是网络标记而非签名。
+
+**Q：为什么 `.bat` 里全是英文？**
+
+刻意的。cmd.exe 按系统代码页（中文 Windows 为 936/GBK）解析 `.bat`，文件若存成 UTF-8 + LF 换行，中文字节会被拦腰切断，整行变成乱码命令报错。所以脚本一律只写 ASCII，中文提示交给 `wingard.py` 打印。
+
+**Q：日志在哪里？**
+
+`logs/wingard.log`，自动轮转（最大 2MB × 3）。当前状态快照在 `logs/state.json`。
+
+**Q：怎么开机自启？**
+
+把 `启动守护.bat` 的快捷方式放进 `shell:startup`（Win+R 输入即可打开启动文件夹）。
 
 ---
 
-## 八、文件说明
+## 文件说明
 
 | 文件 | 作用 |
 |---|---|
-| `wingard.py` | 主程序（单文件，只用 Python 标准库，无第三方依赖） |
+| `wingard.py` | 主程序，单文件，仅标准库 |
 | `config.json` | 配置，首次运行自动生成 |
-| `启动守护.bat` | 后台启动守护（已在跑会提示，不会重复启动） |
-| `停止守护.bat` | 优雅停止（先请求退出，3 秒不退才强杀） |
-| `自检.bat` | 环境+钩子+前台窗口自检 |
+| `启动守护.bat` | 后台启动守护 |
+| `停止守护.bat` | 优雅停止 |
+| `自检.bat` | 环境 + 钩子 + 前台窗口自检 |
 | `测试拦截.bat` | 10 秒拦截验证 |
-| `解除文件锁定.bat` | 清除网络标记，消除「安全警告」弹窗 |
-| `logs/wingard.log` | 运行日志（自动轮转，最大 2MB×3） |
-| `logs/state.json` | 当前状态快照，`--status` 读这个 |
+| `解除文件锁定.bat` | 清除网络标记，消除安全警告弹窗 |
+| `logs/` | 运行日志与状态快照 |
 
-环境要求：Windows 10/11 + Python 3.8 以上（本机是 3.12）。
+---
+
+## 实现摘要
+
+| 组件 | 做法 |
+|---|---|
+| 拦截 | `SetWindowsHookEx(WH_KEYBOARD_LL)`，在独立线程的消息循环里运行，需要拦截时才安装 |
+| 检测 | `CreateToolhelp32Snapshot` 枚举进程 + `GetForegroundWindow` 全屏判定，默认 1 秒轮询 |
+| 恢复 | `UnhookWindowsHookEx` + 线程 `PostThreadMessage(WM_QUIT)`；进程死亡时系统兜底回收 |
+| 状态 | JSON 状态文件原子写入（临时文件 + `os.replace`） |
+| 停止 | 写 stop 标志 → 守护自行优雅退出 → 3 秒未退才 `TerminateProcess` |
+
+---
+
+## License
+
+<!-- 建议补上。没有 LICENSE 时默认保留所有权利，他人不能合法使用/修改/分发。 -->
+MIT
+
+---
+
+## English
+
+**WinKeyGuard** auto-disables the Windows key while a game is running and restores it the moment the game exits.
+
+Implemented with a global low-level keyboard hook (`WH_KEYBOARD_LL`) — no registry edits, no Scancode Map rewrites, and no risk of leaving the Win key permanently disabled: the hook is owned by the process and is reclaimed by Windows when the process ends.
+
+- Windows 10/11, Python 3.8+ (tested on 3.12), standard library only
+- Ships with 49 common game process names plus fullscreen-exclusive auto-detection (excludes maximized windows, browsers and media players to avoid false positives)
+- Hotkeys: `Ctrl+Alt+L` toggle lock, `Ctrl+Alt+P` pause, `Ctrl+Alt+Q` quit
+- Quick check: `python wingard.py --test-hook 10` — press Win during those 10 seconds, nothing should happen
